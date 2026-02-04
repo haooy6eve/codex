@@ -56,11 +56,28 @@ pub struct DockerSandboxConfig {
     pub image: String,
     pub workdir_in_container: PathBuf,
     pub readonly_root: bool,
+    pub mounts: Vec<Mount>,
+    pub tmpfs: Vec<PathBuf>,
+    pub limits: Option<ResourceLimits>,
+    pub user: Option<String>,
 }
 
 #[derive(Clone, Debug)]
 pub struct DockerSandboxExecutor {
     pub config: DockerSandboxConfig,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Mount {
+    pub host_path: PathBuf,
+    pub container_path: PathBuf,
+    pub read_only: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResourceLimits {
+    pub cpu_quota_micros: Option<u64>,
+    pub memory_bytes: Option<u64>,
 }
 
 impl DockerSandboxExecutor {
@@ -95,6 +112,21 @@ impl DockerSandboxExecutor {
             cmd.push("--read-only".to_string());
         }
 
+        if let Some(user) = self.config.user.as_ref() {
+            if !user.trim().is_empty() {
+                cmd.extend(["--user".to_string(), user.clone()]);
+            }
+        }
+
+        if let Some(limits) = self.config.limits.as_ref() {
+            if let Some(cpu_quota_micros) = limits.cpu_quota_micros {
+                cmd.extend(["--cpu-quota".to_string(), cpu_quota_micros.to_string()]);
+            }
+            if let Some(memory_bytes) = limits.memory_bytes {
+                cmd.extend(["--memory".to_string(), memory_bytes.to_string()]);
+            }
+        }
+
         let workdir = self
             .config
             .workdir_in_container
@@ -113,9 +145,115 @@ impl DockerSandboxExecutor {
             format!("{host_workdir}:{container_workdir}:rw"),
         ]);
 
+        for (key, value) in request.env.iter() {
+            cmd.extend(["-e".to_string(), format!("{key}={value}")]);
+        }
+
+        for mount in self.config.mounts.iter() {
+            let mut spec = format!(
+                "{}:{}",
+                mount.host_path.to_string_lossy(),
+                mount.container_path.to_string_lossy()
+            );
+            if mount.read_only {
+                spec.push_str(":ro");
+            } else {
+                spec.push_str(":rw");
+            }
+            cmd.extend(["-v".to_string(), spec]);
+        }
+
+        for tmpfs in self.config.tmpfs.iter() {
+            cmd.extend(["--tmpfs".to_string(), tmpfs.to_string_lossy().to_string()]);
+        }
+
+        for input in request.input_files.iter() {
+            let host_path = input.to_string_lossy().to_string();
+            let container_path = input.to_string_lossy().to_string();
+            cmd.extend(["-v".to_string(), format!("{host_path}:{container_path}:ro")]);
+        }
+
         cmd.push(self.config.image.clone());
         cmd.extend(request.command.clone());
 
         Ok(cmd)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_docker_command_includes_env_and_mounts() {
+        let mut env = HashMap::new();
+        env.insert("LANG".to_string(), "C.UTF-8".to_string());
+        let request = RemoteExecRequest {
+            user_api_key_id: "key-1".to_string(),
+            session_id: "sess-1".to_string(),
+            command: vec!["/bin/echo".to_string(), "hello".to_string()],
+            working_dir: PathBuf::from("/workspace"),
+            env,
+            input_files: vec![PathBuf::from("/workspace/input.txt")],
+        };
+
+        let config = DockerSandboxConfig {
+            image: "codex-exec:latest".to_string(),
+            workdir_in_container: PathBuf::from("/workspace"),
+            readonly_root: true,
+            mounts: vec![Mount {
+                host_path: PathBuf::from("/data"),
+                container_path: PathBuf::from("/data"),
+                read_only: true,
+            }],
+            tmpfs: vec![PathBuf::from("/tmp")],
+            limits: Some(ResourceLimits {
+                cpu_quota_micros: Some(50_000),
+                memory_bytes: Some(512 * 1024 * 1024),
+            }),
+            user: Some("1000:1000".to_string()),
+        };
+
+        let executor = DockerSandboxExecutor::new(config);
+        let command = executor.build_docker_command(&request).expect("command");
+
+        assert!(command.contains(&"--read-only".to_string()));
+        assert!(command.contains(&"--network".to_string()));
+        assert!(command.contains(&"none".to_string()));
+        assert!(command.contains(&"-e".to_string()));
+        assert!(command.contains(&"LANG=C.UTF-8".to_string()));
+        assert!(command.contains(&"--cpu-quota".to_string()));
+        assert!(command.contains(&"50000".to_string()));
+        assert!(command.contains(&"--memory".to_string()));
+        assert!(command.contains(&(512 * 1024 * 1024).to_string()));
+        assert!(command.contains(&"codex-exec:latest".to_string()));
+        assert!(command.contains(&"/bin/echo".to_string()));
+    }
+
+    #[test]
+    fn build_docker_command_rejects_empty_image() {
+        let request = RemoteExecRequest {
+            user_api_key_id: "key-1".to_string(),
+            session_id: "sess-1".to_string(),
+            command: vec!["/bin/echo".to_string()],
+            working_dir: PathBuf::from("/workspace"),
+            env: HashMap::new(),
+            input_files: Vec::new(),
+        };
+        let config = DockerSandboxConfig {
+            image: " ".to_string(),
+            workdir_in_container: PathBuf::from("/workspace"),
+            readonly_root: false,
+            mounts: Vec::new(),
+            tmpfs: Vec::new(),
+            limits: None,
+            user: None,
+        };
+
+        let executor = DockerSandboxExecutor::new(config);
+        let err = executor
+            .build_docker_command(&request)
+            .expect_err("empty image rejected");
+        assert!(matches!(err, RemoteExecError::InvalidDockerImage(_)));
     }
 }
