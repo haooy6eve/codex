@@ -188,9 +188,17 @@ client_request_definitions! {
         inspect_params: true,
         response: v2::ThreadStartResponse,
     },
+    SessionStart => "session/start" {
+        params: v2::SessionStartParams,
+        response: v2::SessionStartResponse,
+    },
     ThreadResume => "thread/resume" {
         params: v2::ThreadResumeParams,
         response: v2::ThreadResumeResponse,
+    },
+    SessionSend => "session/send" {
+        params: v2::SessionSendParams,
+        response: v2::SessionSendResponse,
     },
     ThreadFork => "thread/fork" {
         params: v2::ThreadForkParams,
