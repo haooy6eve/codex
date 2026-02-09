@@ -1185,6 +1185,57 @@ pub struct CommandExecResponse {
     pub stderr: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SessionStartParams {
+    pub api_key_id: String,
+    #[ts(optional = nullable)]
+    pub model: Option<String>,
+    #[ts(optional = nullable)]
+    pub model_provider: Option<String>,
+    #[ts(optional = nullable)]
+    pub cwd: Option<String>,
+    #[ts(optional = nullable)]
+    pub approval_policy: Option<AskForApproval>,
+    #[ts(optional = nullable)]
+    pub sandbox: Option<SandboxMode>,
+    #[ts(optional = nullable)]
+    pub config: Option<HashMap<String, JsonValue>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SessionStartResponse {
+    pub session_id: String,
+    pub thread: Thread,
+    pub model: String,
+    pub model_provider: String,
+    pub cwd: PathBuf,
+    pub approval_policy: AskForApproval,
+    pub sandbox: SandboxPolicy,
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SessionSendParams {
+    pub api_key_id: String,
+    pub session_id: String,
+    #[serde(default)]
+    pub messages: Vec<UserInput>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SessionSendResponse {
+    pub turn_id: String,
+    pub turn: Turn,
+}
+
 // === Threads, Turns, and Items ===
 // Thread APIs
 #[derive(

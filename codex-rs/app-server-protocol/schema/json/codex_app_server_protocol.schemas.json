@@ -485,6 +485,30 @@
             },
             "method": {
               "enum": [
+                "session/start"
+              ],
+              "title": "Session/startRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/SessionStartParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Session/startRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/resume"
               ],
               "title": "Thread/resumeRequestMethod",
@@ -500,6 +524,30 @@
             "params"
           ],
           "title": "Thread/resumeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "session/send"
+              ],
+              "title": "Session/sendRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/SessionSendParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Session/sendRequest",
           "type": "object"
         },
         {
@@ -13270,6 +13318,47 @@
         },
         "type": "object"
       },
+      "SessionSendParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "apiKeyId": {
+            "type": "string"
+          },
+          "messages": {
+            "default": [],
+            "items": {
+              "$ref": "#/definitions/v2/UserInput"
+            },
+            "type": "array"
+          },
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "apiKeyId",
+          "sessionId"
+        ],
+        "title": "SessionSendParams",
+        "type": "object"
+      },
+      "SessionSendResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "turn": {
+            "$ref": "#/definitions/v2/Turn"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "turn",
+          "turnId"
+        ],
+        "title": "SessionSendResponse",
+        "type": "object"
+      },
       "SessionSource": {
         "oneOf": [
           {
@@ -13296,6 +13385,111 @@
             "type": "object"
           }
         ]
+      },
+      "SessionStartParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "apiKeyId": {
+            "type": "string"
+          },
+          "approvalPolicy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AskForApproval"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "config": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "cwd": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "modelProvider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sandbox": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SandboxMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "apiKeyId"
+        ],
+        "title": "SessionStartParams",
+        "type": "object"
+      },
+      "SessionStartResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "approvalPolicy": {
+            "$ref": "#/definitions/v2/AskForApproval"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "modelProvider": {
+            "type": "string"
+          },
+          "reasoningEffort": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ReasoningEffort"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sandbox": {
+            "$ref": "#/definitions/v2/SandboxPolicy"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "thread": {
+            "$ref": "#/definitions/v2/Thread"
+          }
+        },
+        "required": [
+          "approvalPolicy",
+          "cwd",
+          "model",
+          "modelProvider",
+          "sandbox",
+          "sessionId",
+          "thread"
+        ],
+        "title": "SessionStartResponse",
+        "type": "object"
       },
       "Settings": {
         "description": "Settings for a collaboration mode.",

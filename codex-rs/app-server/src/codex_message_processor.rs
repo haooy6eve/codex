@@ -91,6 +91,10 @@ use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::SendUserTurnResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionConfiguredNotification;
+use codex_app_server_protocol::SessionSendParams;
+use codex_app_server_protocol::SessionSendResponse;
+use codex_app_server_protocol::SessionStartParams;
+use codex_app_server_protocol::SessionStartResponse;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
 use codex_app_server_protocol::SkillsConfigWriteParams;
@@ -158,6 +162,12 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigService;
 use codex_core::config::edit::ConfigEdit;
+
+struct StartThreadResult {
+    thread_id: ThreadId,
+    thread: Thread,
+    config_snapshot: ThreadConfigSnapshot,
+}
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::config_loader::CloudRequirementsLoader;
@@ -442,6 +452,9 @@ impl CodexMessageProcessor {
             ClientRequest::ThreadStart { request_id, params } => {
                 self.thread_start(request_id, params).await;
             }
+            ClientRequest::SessionStart { request_id, params } => {
+                self.session_start(request_id, params).await;
+            }
             ClientRequest::ThreadResume { request_id, params } => {
                 self.thread_resume(request_id, params).await;
             }
@@ -489,6 +502,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::TurnStart { request_id, params } => {
                 self.turn_start(request_id, params).await;
+            }
+            ClientRequest::SessionSend { request_id, params } => {
+                self.session_send(request_id, params).await;
             }
             ClientRequest::TurnInterrupt { request_id, params } => {
                 self.turn_interrupt(request_id, params).await;
@@ -1618,6 +1634,90 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_start(&mut self, request_id: RequestId, params: ThreadStartParams) {
+        match self.start_thread_internal(params).await {
+            Ok(result) => {
+                let response = ThreadStartResponse {
+                    thread: result.thread.clone(),
+                    model: result.config_snapshot.model,
+                    model_provider: result.config_snapshot.model_provider_id,
+                    cwd: result.config_snapshot.cwd,
+                    approval_policy: result.config_snapshot.approval_policy.into(),
+                    sandbox: result.config_snapshot.sandbox_policy.into(),
+                    reasoning_effort: result.config_snapshot.reasoning_effort,
+                };
+                self.outgoing.send_response(request_id, response).await;
+
+                let notif = ThreadStartedNotification {
+                    thread: result.thread,
+                };
+                self.outgoing
+                    .send_server_notification(ServerNotification::ThreadStarted(notif))
+                    .await;
+            }
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn session_start(&mut self, request_id: RequestId, params: SessionStartParams) {
+        let SessionStartParams {
+            api_key_id: _api_key_id,
+            model,
+            model_provider,
+            cwd,
+            approval_policy,
+            sandbox,
+            config,
+        } = params;
+
+        let thread_params = ThreadStartParams {
+            model,
+            model_provider,
+            cwd,
+            approval_policy,
+            sandbox,
+            config,
+            base_instructions: None,
+            developer_instructions: None,
+            personality: None,
+            ephemeral: None,
+            dynamic_tools: None,
+            mock_experimental_field: None,
+            experimental_raw_events: false,
+        };
+
+        match self.start_thread_internal(thread_params).await {
+            Ok(result) => {
+                let response = SessionStartResponse {
+                    session_id: result.thread_id.to_string(),
+                    thread: result.thread.clone(),
+                    model: result.config_snapshot.model,
+                    model_provider: result.config_snapshot.model_provider_id,
+                    cwd: result.config_snapshot.cwd,
+                    approval_policy: result.config_snapshot.approval_policy.into(),
+                    sandbox: result.config_snapshot.sandbox_policy.into(),
+                    reasoning_effort: result.config_snapshot.reasoning_effort,
+                };
+                self.outgoing.send_response(request_id, response).await;
+
+                let notif = ThreadStartedNotification {
+                    thread: result.thread,
+                };
+                self.outgoing
+                    .send_server_notification(ServerNotification::ThreadStarted(notif))
+                    .await;
+            }
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn start_thread_internal(
+        &mut self,
+        params: ThreadStartParams,
+    ) -> Result<StartThreadResult, JSONRPCErrorError> {
         let ThreadStartParams {
             model,
             model_provider,
@@ -1655,13 +1755,11 @@ impl CodexMessageProcessor {
         {
             Ok(config) => config,
             Err(err) => {
-                let error = JSONRPCErrorError {
+                return Err(JSONRPCErrorError {
                     code: INVALID_REQUEST_ERROR_CODE,
                     message: format!("error deriving config: {err}"),
                     data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
+                });
             }
         };
 
@@ -1672,13 +1770,11 @@ impl CodexMessageProcessor {
             let snapshot = collect_mcp_snapshot(&config).await;
             let mcp_tool_names = snapshot.tools.keys().cloned().collect::<HashSet<_>>();
             if let Err(message) = validate_dynamic_tools(&dynamic_tools, &mcp_tool_names) {
-                let error = JSONRPCErrorError {
+                return Err(JSONRPCErrorError {
                     code: INVALID_REQUEST_ERROR_CODE,
                     message,
                     data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
+                });
             }
             dynamic_tools
                 .into_iter()
@@ -1690,88 +1786,64 @@ impl CodexMessageProcessor {
                 .collect()
         };
 
-        match self
+        let new_conv = self
             .thread_manager
             .start_thread_with_tools(config, core_dynamic_tools)
             .await
-        {
-            Ok(new_conv) => {
-                let NewThread {
-                    thread_id,
-                    thread,
-                    session_configured,
-                    ..
-                } = new_conv;
-                let config_snapshot = thread.config_snapshot().await;
-                let fallback_provider = self.config.model_provider_id.as_str();
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("error creating thread: {err}"),
+                data: None,
+            })?;
 
-                // A bit hacky, but the summary contains a lot of useful information for the thread
-                // that unfortunately does not get returned from thread_manager.start_thread().
-                let thread = match session_configured.rollout_path.as_ref() {
-                    Some(rollout_path) => {
-                        match read_summary_from_rollout(rollout_path.as_path(), fallback_provider)
-                            .await
-                        {
-                            Ok(summary) => summary_to_thread(summary),
-                            Err(err) => {
-                                self.send_internal_error(
-                                    request_id,
-                                    format!(
-                                        "failed to load rollout `{}` for thread {thread_id}: {err}",
-                                        rollout_path.display()
-                                    ),
-                                )
-                                .await;
-                                return;
-                            }
-                        }
+        let NewThread {
+            thread_id,
+            thread,
+            session_configured,
+            ..
+        } = new_conv;
+        let config_snapshot = thread.config_snapshot().await;
+        let fallback_provider = self.config.model_provider_id.as_str();
+
+        // A bit hacky, but the summary contains a lot of useful information for the thread
+        // that unfortunately does not get returned from thread_manager.start_thread().
+        let thread = match session_configured.rollout_path.as_ref() {
+            Some(rollout_path) => {
+                match read_summary_from_rollout(rollout_path.as_path(), fallback_provider).await {
+                    Ok(summary) => summary_to_thread(summary),
+                    Err(err) => {
+                        return Err(JSONRPCErrorError {
+                            code: INTERNAL_ERROR_CODE,
+                            message: format!(
+                                "failed to load rollout `{}` for thread {thread_id}: {err}",
+                                rollout_path.display()
+                            ),
+                            data: None,
+                        });
                     }
-                    None => build_ephemeral_thread(thread_id, &config_snapshot),
-                };
-
-                let response = ThreadStartResponse {
-                    thread: thread.clone(),
-                    model: config_snapshot.model,
-                    model_provider: config_snapshot.model_provider_id,
-                    cwd: config_snapshot.cwd,
-                    approval_policy: config_snapshot.approval_policy.into(),
-                    sandbox: config_snapshot.sandbox_policy.into(),
-                    reasoning_effort: config_snapshot.reasoning_effort,
-                };
-
-                // Auto-attach a thread listener when starting a thread.
-                // Use the same behavior as the v1 API, with opt-in support for raw item events.
-                if let Err(err) = self
-                    .attach_conversation_listener(
-                        thread_id,
-                        experimental_raw_events,
-                        ApiVersion::V2,
-                    )
-                    .await
-                {
-                    tracing::warn!(
-                        "failed to attach listener for thread {}: {}",
-                        thread_id,
-                        err.message
-                    );
                 }
-
-                self.outgoing.send_response(request_id, response).await;
-
-                let notif = ThreadStartedNotification { thread };
-                self.outgoing
-                    .send_server_notification(ServerNotification::ThreadStarted(notif))
-                    .await;
             }
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("error creating thread: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-            }
+            None => build_ephemeral_thread(thread_id, &config_snapshot),
+        };
+
+        // Auto-attach a thread listener when starting a thread.
+        // Use the same behavior as the v1 API, with opt-in support for raw item events.
+        if let Err(err) = self
+            .attach_conversation_listener(thread_id, experimental_raw_events, ApiVersion::V2)
+            .await
+        {
+            tracing::warn!(
+                "failed to attach listener for thread {}: {}",
+                thread_id,
+                err.message
+            );
         }
+
+        Ok(StartThreadResult {
+            thread_id,
+            thread,
+            config_snapshot,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4273,6 +4345,82 @@ impl CodexMessageProcessor {
                 // Emit v2 turn/started notification.
                 let notif = TurnStartedNotification {
                     thread_id: params.thread_id,
+                    turn,
+                };
+                self.outgoing
+                    .send_server_notification(ServerNotification::TurnStarted(notif))
+                    .await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to start turn: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn session_send(&self, request_id: RequestId, params: SessionSendParams) {
+        let SessionSendParams {
+            api_key_id: _api_key_id,
+            session_id,
+            messages,
+        } = params;
+
+        let turn_params = TurnStartParams {
+            thread_id: session_id,
+            input: messages,
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            model: None,
+            effort: None,
+            summary: None,
+            personality: None,
+            output_schema: None,
+            collaboration_mode: None,
+        };
+
+        let (_, thread) = match self.load_thread(&turn_params.thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let mapped_items: Vec<CoreInputItem> = turn_params
+            .input
+            .into_iter()
+            .map(V2UserInput::into_core)
+            .collect();
+
+        let turn_id = thread
+            .submit(Op::UserInput {
+                items: mapped_items,
+                final_output_json_schema: turn_params.output_schema,
+            })
+            .await;
+
+        match turn_id {
+            Ok(turn_id) => {
+                let turn = Turn {
+                    id: turn_id.clone(),
+                    items: vec![],
+                    error: None,
+                    status: TurnStatus::InProgress,
+                };
+
+                let response = SessionSendResponse {
+                    turn_id: turn_id.clone(),
+                    turn: turn.clone(),
+                };
+                self.outgoing.send_response(request_id, response).await;
+
+                let notif = TurnStartedNotification {
+                    thread_id: turn_params.thread_id,
                     turn,
                 };
                 self.outgoing

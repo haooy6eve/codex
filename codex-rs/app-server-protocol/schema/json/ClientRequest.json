@@ -2103,6 +2103,84 @@
       ],
       "type": "object"
     },
+    "SessionSendParams": {
+      "properties": {
+        "apiKeyId": {
+          "type": "string"
+        },
+        "messages": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/UserInput"
+          },
+          "type": "array"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "apiKeyId",
+        "sessionId"
+      ],
+      "type": "object"
+    },
+    "SessionStartParams": {
+      "properties": {
+        "apiKeyId": {
+          "type": "string"
+        },
+        "approvalPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AskForApproval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "config": {
+          "additionalProperties": true,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "modelProvider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sandbox": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SandboxMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "apiKeyId"
+      ],
+      "type": "object"
+    },
     "SetDefaultModelParams": {
       "properties": {
         "model": {
@@ -3108,6 +3186,30 @@
         },
         "method": {
           "enum": [
+            "session/start"
+          ],
+          "title": "Session/startRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SessionStartParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Session/startRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
             "thread/resume"
           ],
           "title": "Thread/resumeRequestMethod",
@@ -3123,6 +3225,30 @@
         "params"
       ],
       "title": "Thread/resumeRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "session/send"
+          ],
+          "title": "Session/sendRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SessionSendParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Session/sendRequest",
       "type": "object"
     },
     {
